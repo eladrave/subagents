@@ -578,7 +578,7 @@ Run:
 
 ```bash
 git diff --check main...HEAD
-! rg -n "agents/medical_record_retriever\.toml" README.md agents/medical-record-retriever
+! rg -n "\]\(agents/medical_record_retriever\.toml\)" README.md agents/medical-record-retriever
 ! rg -n "T[B]D|T[O]DO|F[I]XME|implement[[:space:]]+later|fill[[:space:]]+in[[:space:]]+details" README.md agents/medical-record-retriever
 python3 - <<'PY'
 from pathlib import Path

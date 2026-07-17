@@ -167,4 +167,3 @@ The root `.gitignore` continues to exclude local configured TOML variants and ev
 - Existing targets require an approved collision-safe backup.
 - No live Drive folder IDs, patient metadata, local machine paths, credentials, or connector secrets appear in committed files.
 - The repository clearly distinguishes created, parsed, installed, discovered, spawned, connector-validated, and behaviorally validated states.
-

@@ -44,7 +44,7 @@ Stop if no Git repository exists or the user does not confirm the exact root. Th
 
 Ask: “What is the Google Drive folder URL containing the medical-record PDFs?”
 
-Require a URL whose path contains `/folders/<folder-id>`. Accept ordinary Drive variants such as `/drive/folders/<folder-id>` or `/drive/u/0/folders/<folder-id>`, ignore query parameters, and extract only an ID matching `[A-Za-z0-9_-]{10,}`. Normalize it to `https://drive.google.com/drive/folders/<folder-id>`. Reject malformed input and ask this question again; do not search Drive by a folder name.
+Require scheme exactly `https` and hostname exactly `drive.google.com`, compared case-insensitively. The URL must not include a username, password, or non-default port. Require its path to contain `/folders/<folder-id>` and extract only an ID matching `[A-Za-z0-9_-]{10,}`. Accept ordinary path variants such as `/drive/folders/<folder-id>` or `/drive/u/0/folders/<folder-id>`; query parameters and fragments may be ignored. Normalize it to `https://drive.google.com/drive/folders/<folder-id>`. Reject malformed input or a non-Google host and ask this question again; do not search Drive by a folder name.
 
 ### 4. Folder identity confirmation
 
@@ -78,7 +78,7 @@ If sign-in is required, let the user complete the connector’s interactive auth
 
 Inspect the resolved target path. If it does not exist, continue. If it exists, ask: “An agent file already exists at `<target>`. Should I create a verified timestamped backup and replace it, or cancel?”
 
-On replacement approval, use a sibling backup named `medical_record_retriever.toml.backup-<UTC timestamp>` where the timestamp is `YYYYMMDDTHHMMSSZ`. If that name exists, append `-1`, `-2`, and so on until the name is unused. Copy the existing file without following an unexpected symlink, verify that the backup bytes match, and only then permit replacement. Cancel on any backup or verification failure.
+On replacement approval, use a sibling backup named `medical_record_retriever.toml.backup-<UTC timestamp>` where the timestamp is `YYYYMMDDTHHMMSSZ`. If that name exists, append `-1`, `-2`, and so on until the name is unused. For project scope, before creating the backup, add the exact root-relative pattern `/.codex/agents/medical_record_retriever.toml.backup-*` to `<root>/.git/info/exclude` if it is absent. Preserve every existing line and avoid duplicate exclusion lines. Copy the existing file without following an unexpected symlink and verify that the backup bytes match. On Unix-like systems, set the backup file mode to `0600` and verify it. For a project-scope backup, also run `git check-ignore -q -- <relative-backup-path>` from the repository root and require success, then run `git status --short -- <relative-backup-path>` and require no output. Only then permit replacement. Cancel on any backup exclusion, permission, byte verification, ignore verification, or clean-status verification failure.
 
 ### 9. Final installation approval
 
@@ -138,9 +138,10 @@ Create the target directory if needed. Write a temporary sibling file using rest
 For project scope, before reporting installation success:
 
 1. Confirm the target is under the approved repository root.
-2. Add exactly `/.codex/agents/medical_record_retriever.toml` to `<root>/.git/info/exclude` if it is absent; preserve all existing lines.
+2. Add exactly `/.codex/agents/medical_record_retriever.toml` to `<root>/.git/info/exclude` if it is absent; preserve all existing lines and avoid duplicates. If a backup will be created, ensure the exact root-relative backup exclusion `/.codex/agents/medical_record_retriever.toml.backup-*` is present before creating it.
 3. Run `git check-ignore -q .codex/agents/medical_record_retriever.toml` from the repository root and require success.
 4. Run `git status --short -- .codex/agents/medical_record_retriever.toml` and require no tracked or untracked configured agent output.
+5. For each backup created, verify byte equality and mode `0600` on Unix-like systems, run `git check-ignore -q -- <relative-backup-path>`, and require `git status --short -- <relative-backup-path>` to produce no output.
 
 After installation, re-read the exact target, verify its digest matches the validated working copy, verify required permissions where supported, and report the target and proven state without printing the configured TOML.
 
@@ -163,6 +164,6 @@ Report each probe as passed, failed, or not run with evidence from actual activi
 
 ## Required stop conditions
 
-Stop without installation when scope is unresolved, a project root is unconfirmed, the Drive URL is malformed, folder identity is unconfirmed, authorization is absent, source identity fails, an existing target cannot be backed up safely, configured values remain unresolved, static validation fails, target protection fails, or the final bytes cannot be verified.
+Stop without installation when scope is unresolved, a project root is unconfirmed, the Drive URL is malformed or has a disallowed origin, folder identity is unconfirmed, authorization is absent, source identity fails, an existing target cannot be backed up safely, a backup exclusion cannot be installed, a backup's permissions or bytes cannot be verified, an exact target or backup ignore check fails, an exact target or backup appears in Git status, configured values remain unresolved, static validation fails, target protection fails, or the final bytes cannot be verified.
 
 Stop behavioral validation without producing a medical answer when the custom role is undiscovered or unspawned, the configured folder identity is absent, or required Drive read tools are unavailable or unauthenticated. Report the last proven state and the exact failed gate.

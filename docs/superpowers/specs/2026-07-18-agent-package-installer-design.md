@@ -37,7 +37,7 @@ The questionnaire runs in this order:
 
 1. Ask whether installation is personal or project-scoped. Recommend personal installation unless the agent should apply only inside one repository.
 2. For project scope, discover and confirm the exact repository root before forming the target path.
-3. Ask for the canonical Google Drive folder URL.
+3. Ask for a Google Drive folder URL and require scheme exactly `https`, hostname exactly `drive.google.com` compared case-insensitively, no username or password, no non-default port, and a path containing `/folders/<folder-id>` where the ID matches `[A-Za-z0-9_-]{10,}`. Query parameters and fragments do not affect extraction.
 4. Extract the folder ID and show the normalized folder URL for confirmation.
 5. Ask the user to explicitly confirm that the folder contains their records or that they are authorized to access the patient records.
 6. Inspect whether the Google Drive plugin is installed and enabled. If not, offer the supported installation path.
@@ -60,7 +60,7 @@ Project installation target:
 <confirmed-repository-root>/.codex/agents/medical_record_retriever.toml
 ```
 
-For project installation, the configured file contains a private Drive folder identifier and must remain local. Codex will add the exact relative target path to the repository's local `.git/info/exclude`, preserving the shared `.gitignore`. If the target is not inside a Git repository, project installation stops and explains that a repository root is required.
+For project installation, the configured file and any sibling backup contain a private Drive folder identifier and must remain local. Codex will add the exact root-relative active-target pattern `/.codex/agents/medical_record_retriever.toml` and, before creating a project-scope backup, the exact root-relative backup pattern `/.codex/agents/medical_record_retriever.toml.backup-*` to the repository's local `.git/info/exclude`. It preserves every existing exclusion line, avoids duplicates, and leaves the shared `.gitignore` unchanged. If the target is not inside a Git repository, project installation stops and explains that a repository root is required.
 
 ## Source Acquisition
 
@@ -85,12 +85,13 @@ Codex creates a configured working copy, replaces only the two documented `CONFI
 The installer must:
 
 - Treat the folder ID and URL as data, never shell syntax.
-- Reject malformed folder URLs or IDs.
+- Reject malformed folder URLs or IDs, non-HTTPS schemes, non-`drive.google.com` hostnames, user information, and non-default ports. Normalize an accepted URL to exactly `https://drive.google.com/drive/folders/<folder-id>`.
 - Never print connector credentials, tokens, cookies, or authorization headers.
 - Never place the configured file in this public repository.
 - Set personal installation permissions to owner read/write (`0600`) on Unix-like systems.
 - Preserve existing files unless the user approved a backup and replacement.
-- Use a timestamped backup name and verify the backup before replacing the target.
+- Use a timestamped backup name and verify its bytes before replacing the target. Set every backup to mode `0600` and verify it on Unix-like systems.
+- For a project-scope backup, install the backup exclusion before creation, then require `git check-ignore -q -- <relative-backup-path>` to succeed and `git status --short -- <relative-backup-path>` to produce no output.
 - Avoid changing global Codex configuration unless plugin installation requires the supported Codex command or UI workflow and the user approved it.
 
 ## Google Drive Setup
@@ -111,7 +112,7 @@ Before installation, Codex must run:
 3. The strict custom-agent validator when `/home`-independent discovery finds the `creating-codex-custom-subagents` validator locally. If unavailable, report that the optional strict validation was not run rather than inventing success.
 4. A secret/privacy scan ensuring the configured file contains no credentials or medical record contents.
 
-After installation, verify the exact target file, file mode where supported, and a digest that matches the validated configured working copy.
+After installation, verify the exact target file, file mode where supported, and a digest that matches the validated configured working copy. For project scope, retain the active target's exact ignore and clean-status checks and apply the corresponding exact-path checks to every generated backup.
 
 ## Behavioral Validation
 
@@ -138,7 +139,7 @@ Stop without installation when:
 - The Drive folder URL is malformed.
 - Authorization is absent or ambiguous.
 - The source artifact has the wrong identity or does not parse.
-- An existing target cannot be backed up safely.
+- An existing target cannot be backed up safely, including any backup exclusion, permission, byte, exact-path ignore, or clean-status verification failure.
 - Configured values remain unresolved.
 - Static validation fails.
 - The target cannot be written or protected as required.
@@ -163,7 +164,7 @@ The root `.gitignore` continues to exclude local configured TOML variants and ev
 - All repository links resolve.
 - The public TOML parses and passes strict structural validation with no warnings.
 - The installer questionnaire is ordered, one-question-at-a-time, and covers both personal and project scope.
-- Project installation instructions protect the configured path through `.git/info/exclude`.
+- Project installation instructions protect the configured path and generated sibling backups through `.git/info/exclude` and exact-path ignore and clean-status checks.
 - Existing targets require an approved collision-safe backup.
 - No live Drive folder IDs, patient metadata, local machine paths, credentials, or connector secrets appear in committed files.
 - The repository clearly distinguishes created, parsed, installed, discovered, spawned, connector-validated, and behaviorally validated states.

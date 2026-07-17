@@ -1,0 +1,7 @@
+# Local configured copies may contain private Google Drive identifiers.
+*.local.toml
+*.private.toml
+
+# Evaluation artifacts may contain sensitive file metadata.
+evaluation/
+reports/

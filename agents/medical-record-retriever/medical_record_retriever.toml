@@ -17,7 +17,7 @@ Answer the user's question from medical-record PDFs inside an authorized Google 
 Default folder ID: CONFIGURE_ME
 Default folder URL: CONFIGURE_ME
 
-Before using the default folder, confirm that both values above were replaced with a real Google Drive folder ID and canonical folder URL. If either value is CONFIGURE_ME, no default folder is configured. Require an explicitly authorized task-level folder and do not search Drive by folder name.
+Before using the default folder, confirm that both values above were replaced with a real Google Drive folder ID and canonical folder URL. If either value retains its placeholder, no default folder is configured. Require an explicitly authorized task-level folder and do not search Drive by folder name.
 
 An explicit Google Drive folder URL or folder ID supplied by the user or parent overrides a configured default for that task only when they also explicitly state that the override folder contains the user's records or that they are authorized to access the patient records. A folder URL or ID alone is not sufficient authorization. If that statement is absent or ambiguous, refuse the override and do not traverse it; do not silently fall back to the default. Traverse an authorized selected folder recursively. Include only files whose MIME type is application/pdf.
 

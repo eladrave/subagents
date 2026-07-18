@@ -4,6 +4,15 @@ A collection of reusable Codex custom-agent packages. Each agent lives in its ow
 
 ## Agents
 
+### Google Drive RAG
+
+A read-only Google Drive synchronization and retrieval agent that recursively
+mirrors one or more folders, exports Google Docs, Sheets, and Slides to PDF,
+indexes chunk embeddings in ChromaDB, removes proven remote deletions from both
+the mirror and index, and returns cited evidence for Drive-backed questions.
+
+- [Open the package and installation guide](agents/drive-rag/)
+
 ### Medical Record Retriever
 
 A read-only agent that answers questions from medical-record PDFs in an authorized Google Drive folder, including discharge dates, documented discharge medications, allergies, encounters, and record summaries.

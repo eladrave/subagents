@@ -31,6 +31,23 @@ Give Codex this folder URL and say:
 
 [`INSTALL.md`](INSTALL.md) is the authoritative installation contract.
 
+## Reinstall or update with Codex
+
+To reinstall the agent or update an existing installation to the latest version
+from this repository, give Codex this prompt:
+
+> Reinstall the Drive RAG subagent from
+> `https://github.com/eladrave/subagents/tree/main/agents/drive-rag`.
+> Read and follow `INSTALL.md` exactly. Preserve my existing Drive RAG state
+> root, configured folders, local mirror, and ChromaDB data. Verify the installed
+> agent and Skill afterward, then start a fresh Codex task so discovery refreshes.
+
+Reinstallation updates the agent, Skill, scripts, and installation guidance. It
+must reuse the existing state root rather than replacing or clearing it, so the
+folder registry, mirrored artifacts, manifest, and ChromaDB index remain intact.
+The installer must still run its documented validation, and a fresh Codex task
+is required before treating refreshed agent discovery as verified.
+
 ## Manage Google Drive folders
 
 The recommended interface is a natural-language request to Codex. Codex

@@ -10,6 +10,14 @@ A read-only agent that answers questions from medical-record PDFs in an authoriz
 
 - [Open the package and installation guide](agents/medical-record-retriever/)
 
+### Medical Record Retriever (Generic)
+
+The same public-safe Medical Record Retriever package, retained as a separately addressable Generic variant for sharing and installation from its own folder URL.
+
+- [Open the Generic package and installation guide](agents/medical-record-retriever-generic/)
+
+Both folders install the same `medical_record_retriever` agent identity. Install one variant, not both, in the same Codex scope.
+
 ## Package convention
 
 Each `agents/<package-name>/` directory should be independently understandable when shared as a GitHub folder URL. Keep its entry-point `README.md`, installation instructions, and public template together. Installation instructions must distinguish artifact creation, static validation, installation, discovery, spawning, connector validation, and behavioral validation.

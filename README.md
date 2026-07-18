@@ -1,69 +1,29 @@
 # Codex Custom Subagents
 
-Reusable custom-agent configurations for Codex.
+A collection of reusable Codex custom-agent packages. Each agent lives in its own folder under `agents/` with a package README, a guided installation contract, and a public-safe agent artifact.
 
-## Medical Record Retriever
+## Agents
 
-`medical_record_retriever` is a read-only agent template for answering questions from medical-record PDFs in an authorized Google Drive folder. It performs retrieval at query time rather than building a persistent local vector index.
+### Medical Record Retriever
 
-Example questions:
+A read-only agent that answers questions from medical-record PDFs in an authorized Google Drive folder, including discharge dates, documented discharge medications, allergies, encounters, and record summaries.
 
-- “When was I discharged from Lee Health?”
-- “Which medications were documented in my discharge instructions?”
-- “What allergies are recorded in these documents?”
+- [Open the package and installation guide](agents/medical-record-retriever/)
 
-The agent is a record retriever and summarizer, not a clinician. It must not diagnose, prescribe, or recommend treatment or medication changes.
+## Package convention
 
-### Requirements
+Each `agents/<package-name>/` directory should be independently understandable when shared as a GitHub folder URL. Keep its entry-point `README.md`, installation instructions, and public template together. Installation instructions must distinguish artifact creation, static validation, installation, discovery, spawning, connector validation, and behavioral validation.
 
-- A current Codex client with custom-agent support.
-- The Google Drive plugin installed and authorized.
-- An authorized Google Drive folder containing PDF medical records.
+## Privacy and security
 
-### Configure and install
+- Never commit configured data-source IDs or URLs, patient or customer identifiers, source inventories, extracted private content, credentials, connector tokens, cookies, or authorization headers.
+- Keep public templates non-operational with explicit configuration markers.
+- Require explicit authorization before accessing private data sources.
+- Prefer read-only sandboxing and least-privilege connector accounts.
+- Treat connector installation and connector authentication as separate gates.
+- Validate actual custom-agent activity and tool calls before calling an agent operational.
 
-1. Open [`agents/medical_record_retriever.toml`](agents/medical_record_retriever.toml).
-2. Replace both `CONFIGURE_ME` values with the authorized folder ID and canonical folder URL.
-3. Copy the configured file into your personal agents directory:
-
-   ```bash
-   mkdir -p ~/.codex/agents
-   cp agents/medical_record_retriever.toml ~/.codex/agents/medical_record_retriever.toml
-   chmod 600 ~/.codex/agents/medical_record_retriever.toml
-   ```
-
-4. Restart Codex or open a new task so the agent list refreshes.
-5. Explicitly test the installed role before relying on it:
-
-   ```text
-   Spawn medical_record_retriever and ask: “When was I discharged from the named facility?”
-   ```
-
-Confirm that the custom role actually spawned, used only Google Drive read operations, and cited the source PDF. A response that merely labels itself with the agent name is not proof that the configuration loaded.
-
-If the template still contains `CONFIGURE_ME`, it will refuse to use a default folder. You may provide a task-level folder only with an explicit statement that it contains your records or that you are authorized to access those records.
-
-### Security notes
-
-- The filesystem sandbox is read-only.
-- Drive mutation is prohibited by the agent instructions, but connector-level write-tool restriction may not be available. For stronger isolation, use a dedicated Google account whose Drive access is limited to the intended records folder.
-- Do not commit folder IDs, patient identifiers, record inventories, extracted text, credentials, or connector tokens.
-- The agent does not download PDFs, persist extracted content, or create embeddings/indexes.
-- Treat the template as created and statically validated only. It becomes operational only after a fresh session demonstrates successful selection, tool discovery, safe read calls, citations, and failure behavior.
-
-### Static validation
-
-Parse the TOML with Python:
-
-```bash
-python3 -c 'import pathlib,tomllib; p=pathlib.Path("agents/medical_record_retriever.toml"); d=tomllib.loads(p.read_text()); assert d["name"] == "medical_record_retriever"; assert d["sandbox_mode"] == "read-only"; print("TOML_PARSE_OK")'
-```
-
-If the `creating-codex-custom-subagents` Skill is installed, also run its strict validator:
-
-```bash
-python3 ~/.codex/skills/creating-codex-custom-subagents/scripts/validate_agent.py agents/medical_record_retriever.toml --strict
-```
+Local configured TOML variants and evaluation/report artifacts are ignored by the repository patterns in [`.gitignore`](.gitignore). Project installers should additionally protect exact configured target paths in the repository-local `.git/info/exclude`.
 
 ## License
 

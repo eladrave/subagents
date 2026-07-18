@@ -2,6 +2,7 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -98,6 +99,38 @@ def test_partial_empty_listing_preserves_committed_mirror_and_vectors(sync_fixtu
     assert "file-a" in engine.manifest().files
     assert engine.index.count_file("file-a") > 0
     assert (engine.state_root / "mirrors" / "Finance" / "Policy.pdf").exists()
+
+
+def test_unchanged_partial_refresh_repairs_local_paths_after_state_relocation(
+    sync_fixture, tmp_path
+):
+    from chromadb.api.shared_system_client import SharedSystemClient
+
+    original = sync_fixture.engine
+    original.apply(sync_fixture.first_inventory, sync_fixture.first_artifacts)
+    moved_root = tmp_path / "relocated-state"
+    shutil.move(str(original.state_root), moved_root)
+    SharedSystemClient.clear_system_cache()
+    moved = SyncEngine.open(moved_root, sync_fixture.embedder)
+    inventory = replace(
+        sync_fixture.first_inventory,
+        run_id="run-relocated",
+        complete=False,
+        incomplete_reason="connector omitted completeness marker",
+        generated_at="2026-07-18T10:01:00Z",
+    )
+
+    result = moved.apply(inventory, ArtifactSet(inventory.run_id, ()))
+
+    assert result.status == "PARTIAL_INDEX"
+    assert moved.manifest().last_success == inventory.generated_at
+    assert not moved.has_pending_journal()
+    records = moved.index.collection.get(
+        where={"drive_file_id": "file-a"}, include=["metadatas"]
+    )
+    expected = str(moved_root / "mirrors" / "Finance" / "Policy.pdf")
+    assert records["metadatas"]
+    assert {item["local_path"] for item in records["metadatas"]} == {expected}
 
 
 def test_corrupt_changed_artifact_keeps_previous_version(sync_fixture):
@@ -1262,7 +1295,7 @@ def test_activation_snapshot_rejects_rehashed_arbitrary_metadata(sync_fixture):
         SyncEngine.open(engine.state_root, engine.embedder).recover()
 
 
-def test_unchanged_no_repath_activation_cannot_replace_embedding(sync_fixture):
+def test_unchanged_repath_activation_cannot_replace_embedding(sync_fixture):
     engine = sync_fixture.engine
     engine.apply(sync_fixture.first_inventory, sync_fixture.first_artifacts)
     Registry.load(engine.state_root).add(
@@ -1296,28 +1329,23 @@ def test_unchanged_no_repath_activation_cannot_replace_embedding(sync_fixture):
         interrupted._journal_path.read_text(encoding="utf-8")
     )
     activation = journal_payload["journal"]["activation"]
-    if isinstance(activation, dict):
-        activation_path = Path(activation["path"])
-        activation_payload = json.loads(
-            activation_path.read_text(encoding="utf-8")
-        )
-        activation_payload["activation"]["embeddings"][0] = [0.0, 0.0, 0.0]
-        activation_path.write_text(
-            json.dumps(activation_payload, sort_keys=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        activation["sha256"] = hashlib.sha256(
-            activation_path.read_bytes()
-        ).hexdigest()
-        interrupted._journal_path.write_text(
-            json.dumps(journal_payload, sort_keys=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
-    else:
-        assert activation == []
+    assert isinstance(activation, list) and activation
+    activation_path = Path(activation[0]["path"])
+    activation_payload = json.loads(activation_path.read_text(encoding="utf-8"))
+    activation_payload["activation"]["embeddings"][0] = [0.0, 0.0, 0.0]
+    activation_path.write_text(
+        json.dumps(activation_payload, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    activation[0]["sha256"] = hashlib.sha256(activation_path.read_bytes()).hexdigest()
+    interrupted._journal_path.write_text(
+        json.dumps(journal_payload, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
 
-    recovered = SyncEngine.open(engine.state_root, engine.embedder).recover()
-    record = recovered.engine.index.collection.get(
+    with pytest.raises(DriveRagError, match="embedding"):
+        SyncEngine.open(engine.state_root, engine.embedder).recover()
+    record = engine.index.collection.get(
         where={"drive_file_id": "file-a"}, include=["embeddings"]
     )
     assert [float(value) for value in record["embeddings"][0]] == [1.0, 0.0, 0.0]

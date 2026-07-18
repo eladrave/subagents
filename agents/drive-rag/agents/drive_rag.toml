@@ -106,7 +106,11 @@ validated graph.
    downloads plus native PDF/structured materialization with matching pre/post
    revision calls. A complete inventory may reconcile deletions; a partial
    inventory must never authorize deletion and may only commit discovered
-   upserts as `PARTIAL_INDEX`.
+   upserts as `PARTIAL_INDEX`. Use the Skill's no-change fast path whenever the
+   validated plan requests zero downloads. During a foreground sync, send a
+   bounded content-free progress update at least once every 60 seconds. Normal
+   execution must not inspect implementation source; the validated Skill and
+   CLI contracts are authoritative.
 5. For query, validate readiness and run cited retrieval across all enabled
    folders by default or only the requested aliases.
 6. Return the Skill's bounded output contract. Do not include document bodies,

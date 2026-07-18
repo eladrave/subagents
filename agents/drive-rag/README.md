@@ -135,6 +135,26 @@ enabled-folder registry on every run. If task automation is unavailable, the
 agent reports `NOT_SCHEDULED` instead of claiming that synchronization is
 scheduled.
 
+### Sync progress and recovery
+
+A foreground sync reports bounded, content-free progress at least once every
+60 seconds while connector work is still running. When the validated plan has
+no downloads, the agent uses its no-change fast path and immediately applies an
+empty artifact set; it must still finish with a fresh `SYNC_OK_NO_CHANGES`,
+`SYNC_OK_CHANGED`, or `PARTIAL_INDEX` result instead of stopping after planning.
+
+`PARTIAL_INDEX` is an intentional usable state when the Drive connector returns
+discovered files without proving that folder enumeration is complete. The agent
+revision-fences and indexes the discovered files, preserves previously committed
+content, and forbids deletion until a later inventory proves completeness. Query
+answers include the corresponding coverage warning.
+
+If an older installation appears stuck during an unchanged refresh, interrupt
+it cleanly, use the **Reinstall or update with Codex** prompt above, start a
+fresh Codex task, and request a new sync. The update preserves configured
+folders, mirrors, and ChromaDB data. The next successful apply also repairs
+stored local-path metadata when the state root moved between installations.
+
 ## Package contents
 
 - `agents/drive_rag.toml` — custom-agent definition.

@@ -363,6 +363,30 @@ reported SHA-256 before reading it, then validate `schema_version`, `run_id`,
 against the exact validated inventory. Stop on any unrequested, missing, or
 conflicting identity.
 
+Use bounded concurrent batches for independent connector metadata and revision
+reads; do not serialize one call per file. Keep each batch at ten files or
+fewer, validate every response identity, and stop the batch on any failed or
+mismatched result. During an interactive or parent-observed foreground sync,
+send a bounded content-free progress update after each connector batch and at
+least once every 60 seconds. Report only the completed stage and counts; never
+include document bodies or raw connector output. A scheduled unattended run
+does not need conversational updates, but it must retain the same bounded
+batching and fail-closed behavior.
+
+Normal sync execution must not inspect implementation source. The validated
+Skill, CLI help, and schema-1 command results are the runtime contract. Do not
+pause a normal run to read `drive_rag.py` or `drive_rag_lib` merely to rediscover
+partial-inventory behavior already defined here.
+
+Use this no-change fast path after validating `sync plan`: when the plan reports
+zero downloads, do not fetch, export, or read structured content. Write the
+schema-1 empty artifact set for that exact run, verify it contains zero
+artifacts, and immediately call `sync apply`. This applies both to a fully
+unchanged plan and to a deletion-only complete plan; partial plans must still
+contain zero deletions. Do not stop after writing the empty artifact set—the
+fresh `SYNC_OK_NO_CHANGES`, `SYNC_OK_CHANGED`, or `PARTIAL_INDEX` apply result is
+the required terminal sync result.
+
 Fetch or export only file identities requested by the validated sync plan.
 Never prefetch the entire corpus and never use a name search as a substitute
 for exact file ID retrieval.

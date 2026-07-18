@@ -905,19 +905,11 @@ class SyncEngine:
         return affected
 
     def _activation_unchanged_file_ids(self, journal: Journal) -> set[str]:
-        base_aliases = self._folder_map(journal.base_folders)
-        target_aliases = self._folder_map(journal.target_folders)
-        result: set[str] = set()
-        for file_id in journal.plan.unchanged_file_ids:
-            committed = journal.base_manifest.files[file_id]
-            if self._paths_or_aliases_changed(
-                committed.paths,
-                journal.plan.target_paths[file_id],
-                base_aliases,
-                target_aliases,
-            ):
-                result.add(file_id)
-        return result
+        return {
+            file_id
+            for file_id in journal.plan.unchanged_file_ids
+            if journal.base_manifest.files[file_id].active_chunk_ids
+        }
 
     def _base_index_roots(
         self, journal: Journal
@@ -936,11 +928,6 @@ class SyncEngine:
             for root_id, path in selected.items():
                 metadata = {
                     "folder_alias": aliases[root_id].alias,
-                    "local_path": str(
-                        self._mirror_path_from_kind(
-                            path, committed.native_kind, aliases
-                        )
-                    ),
                 }
                 remote = remotes.get(file_id)
                 if remote is not None and file_id not in downloads:
@@ -1040,7 +1027,6 @@ class SyncEngine:
         return candidates, roots, mime_types
 
     def _activate_index(self, journal: Journal, target: Manifest) -> None:
-        base_aliases = self._folder_map(journal.base_folders)
         target_aliases = self._folder_map(journal.target_folders)
         remotes = self._remote_files(journal.inventory)
         for remote in journal.plan.downloads:
@@ -1054,12 +1040,7 @@ class SyncEngine:
             committed = journal.base_manifest.files[file_id]
             remote = remotes[file_id]
             targets = journal.plan.target_paths[file_id]
-            if self._paths_or_aliases_changed(
-                committed.paths,
-                targets,
-                base_aliases,
-                target_aliases,
-            ):
+            if committed.active_chunk_ids:
                 self.index.repath_file(
                     file_id,
                     remote.revision,

@@ -136,6 +136,22 @@ def test_skill_defines_safe_partial_index_contract(asset_source: Path):
     assert "coverage warning" in skill
 
 
+def test_sync_contract_has_bounded_progress_and_no_change_fast_path(
+    asset_source: Path,
+):
+    skill = _normalized(_read(asset_source / "skills" / "drive-rag" / "SKILL.md"))
+    agent = _normalized(_read(asset_source / "agents" / "drive_rag.toml"))
+
+    for contract in (skill, agent):
+        assert "no-change fast path" in contract
+        assert "at least once every 60 seconds" in contract
+        assert "must not inspect implementation source" in contract
+    assert "concurrent batches" in skill
+    assert "zero downloads" in skill
+    assert "empty artifact set" in skill
+    assert "immediately call `sync apply`" in skill
+
+
 def test_skill_keeps_recursive_folders_out_of_remote_inventory_files(
     asset_source: Path,
     tmp_path: Path,

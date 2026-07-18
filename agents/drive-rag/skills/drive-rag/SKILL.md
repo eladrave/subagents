@@ -68,7 +68,9 @@ agent. Required Google Drive connector capabilities are:
 - `list_folder(url=<canonical folder URL>, top_k=<bounded limit>)` for folder
   validation and recursive inventory;
 - `get_file_metadata(fileId=<exact file ID>, fields="id,name,mimeType,modifiedTime,version,headRevisionId,md5Checksum,size,parents,webViewLink")`
-  for authoritative file/folder identity, ancestry, and revision fencing;
+  for authoritative file/folder identity, ancestry, and available metadata;
+- `list_file_revisions(fileId=<exact file ID>)` for authoritative opaque
+  `currentRevisionId` fallback and pre/post materialization revision fencing;
 - `fetch(url=<canonical Drive file URL>, download_raw_file=True)` for
   non-native file bytes;
 - `export_file(id=<file ID>, mime_type="application/pdf")` for native PDF
@@ -248,10 +250,21 @@ md5Checksum -> checksum
 size -> size
 parents -> parent_ids
 webViewLink -> drive_url
+title -> name
+mime_type -> mime_type
+modified_time -> modified_time
+parent_ids -> parent_ids
+url -> drive_url
 ```
 
-Encode `version` as a non-empty decimal revision identity and include
-`headRevisionId` when the connector supplies it. `md5Checksum` and `size` may be
+Use `version` or `headRevisionId` when present. When both are absent, call
+`list_file_revisions(fileId=<exact file ID>)` and use its non-empty
+`currentRevisionId`. Treat every revision as an opaque revision string; do not
+require decimal formatting. Call revision history immediately before and after
+every raw download, native PDF export, and native structured-content read, and
+accept the artifact only with a matching pre/post revision. A changed revision
+discards the artifact and requires a fresh inventory/materialization attempt.
+`md5Checksum` and `size` may be
 null only when Drive omits them for that MIME type. The accumulated root-relative
 path still supplies `parts`; metadata `parents` must agree with every direct
 parent edge used to build each path. If metadata is unavailable, malformed, or
@@ -314,10 +327,15 @@ exhausted, the connector has explicitly ended pagination, and all identities
 validate. Any partial response, timeout, tool error, unavailable page,
 truncation, skipped subtree, malformed record, stale generated time, or identity
 conflict makes the inventory incomplete. Preserve the reason and return
-`INVENTORY_INCOMPLETE`.
-An incomplete inventory must not authorize deletion: the agent must not call
-`sync apply` with removals, and it must never pass that inventory to `sync apply`
-at all.
+`PARTIAL_INDEX` when every discovered file still has validated identity and a
+stable revision. An incomplete inventory must not authorize deletion and cannot
+serve as deletion proof. It must never authorize deletion: the agent must not
+call `sync apply` with
+removals. It may run the validated partial
+plan/apply path only to upsert discovered revision-fenced files, preserve
+unobserved committed files, and commit `partial` coverage with the exact
+incomplete reason. If any discovered identity, revision, path, or artifact is
+invalid, return `INVENTORY_INCOMPLETE` without apply.
 
 Validate the materialized inventory before planning:
 
@@ -431,19 +449,31 @@ structured normalization, supported-file extraction and OCR, chunking, local
 embedding, ChromaDB mutation, mirror promotion, exact unreachable-file
 deletion, manifest commit, and recovery journaling. Do not call `index
 delete-file`, remove mirror paths, or modify the manifest as a shortcut.
+For a partial inventory, validate status `PARTIAL_INDEX`, deletion count zero,
+partial coverage, coverage value `partial`, and the exact coverage reason.
+Partial apply may insert or
+update discovered files but must preserve every unobserved committed manifest,
+mirror, object, and ChromaDB identity. Only a later proven-complete inventory
+may remove an identity because it was absent remotely.
 
 Every committed file has an explicit index status. Supported content is
 `indexed` with a null reason, including a supported empty document that
 legitimately produces zero chunks. A mirrored unsupported file is `unindexed`
-with reason `UNSUPPORTED_FORMAT` and has no active chunks. Preserve these fields
-through alias moves, recovery, and unchanged-file commits; deletion removes the
+with reason `UNSUPPORTED_FORMAT` and has no active chunks. An artifact that
+exceeds a deterministic extraction safety limit is also
+mirrored and recorded as `unindexed`, with reason
+`EXTRACTION_LIMIT_EXCEEDED`; this includes PDFs larger than 32 MiB. Do not
+repeatedly retry such an artifact in a way that can exhaust the runtime.
+Preserve these fields through alias moves, recovery, and unchanged-file
+commits; deletion removes the
 entire manifest entry. Content-free sync and status output may report indexed
 and unindexed counts plus reason counts, but never source content. A legacy
 schema-1 manifest entry without both fields is invalid state and requires a
 controlled resync/rebuild; never infer a status from an empty chunk list.
 
-Return `SYNC_OK_NO_CHANGES` or `SYNC_OK_CHANGED` only from the validated apply
-result. On failure return `SYNC_FAILED_PREVIOUS_VERSION_ACTIVE` only after
+Return `SYNC_OK_NO_CHANGES` or `SYNC_OK_CHANGED` only from a complete validated
+apply result, and `PARTIAL_INDEX` from a validated deletion-free partial apply.
+On failure return `SYNC_FAILED_PREVIOUS_VERSION_ACTIVE` only after
 status confirms the last committed version is still active; otherwise report
 the exact unresolved failure without claiming recovery.
 
@@ -466,6 +496,9 @@ original Drive path, Drive URL, local mirror path, page/sheet-range/slide/sectio
 locator, revision, content hash, MIME type, and retrieval distance. Treat the
 distance as retrieval diagnostics, not source truth. Deduplicate overlapping
 evidence and cite the exact locator and Drive URL in the parent handoff.
+When manifest coverage is partial, require query status `PARTIAL_INDEX`, include
+the exact coverage reason and a coverage warning on every query result, and tell
+the parent that evidence may omit files the connector did not enumerate.
 
 If the evidence list is empty or no item supports the question, return
 `NO_RELEVANT_EVIDENCE`. Do not fill gaps from general knowledge. If the CLI
@@ -504,8 +537,10 @@ Synchronize every enabled configured Google Drive folder into the shared local
 state. Prove recursive inventory completeness before any deletion, export native
 Google Docs, Sheets, and Slides as PDF, update ChromaDB, and report only status,
 counts, changed identities, and actionable failures. If no folder is configured,
-return CONFIGURATION_REQUIRED. If connector output is incomplete or cannot be
-materialized locally, preserve the previous committed mirror and index.
+return CONFIGURATION_REQUIRED. If connector enumeration is incomplete but every
+discovered file has a stable revision, perform deletion-free partial upserts and
+return PARTIAL_INDEX with a coverage warning. Never authorize deletion from a
+partial inventory; preserve unobserved committed mirror and index records.
 ```
 
 Use scheduled-task management only when its tool is actually visible. After a
@@ -569,7 +604,7 @@ Return one primary status code and only the fields relevant to the mode:
 Use these failure states exactly when applicable:
 `CONFIGURATION_REQUIRED`, `CONNECTOR_UNAVAILABLE`,
 `CONNECTOR_AUTH_REQUIRED`, `CONNECTOR_OUTPUT_UNSUPPORTED`,
-`INVENTORY_INCOMPLETE`,
+`INVENTORY_INCOMPLETE`, `PARTIAL_INDEX`,
 `SYNC_FAILED_PREVIOUS_VERSION_ACTIVE`, `INDEX_STALE`, and `NOT_SCHEDULED`.
 Never report connector authentication, scheduled-task creation, synchronization,
 deletion, or retrieval as operational unless that exact stage was directly

@@ -11,6 +11,7 @@ from .protocol import DriveRagError
 INDEXED = "indexed"
 UNINDEXED = "unindexed"
 UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
+EXTRACTION_LIMIT_EXCEEDED = "EXTRACTION_LIMIT_EXCEEDED"
 
 
 def _require_keys(
@@ -307,6 +308,8 @@ class Manifest:
     last_failure: str | None
     root_ids: tuple[str, ...] = ()
     last_inventory_generated_at: str | None = None
+    coverage: str = "complete"
+    coverage_reason: str | None = None
 
     @classmethod
     def empty(cls) -> "Manifest":
@@ -366,22 +369,23 @@ class Manifest:
             None,
             inventory.root_ids,
             inventory.generated_at,
+            "complete" if inventory.complete else "partial",
+            inventory.incomplete_reason,
         )
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "Manifest":
-        _require_keys(
-            payload,
-            {
+        required = {
                 "files",
                 "model_identity",
                 "last_success",
                 "last_failure",
                 "root_ids",
                 "last_inventory_generated_at",
-            },
-            "manifest",
-        )
+            }
+        extended = required | {"coverage", "coverage_reason"}
+        if set(payload) not in (required, extended):
+            raise DriveRagError("manifest fields are invalid", code="INVALID_STATE")
         raw_files = payload["files"]
         if not isinstance(raw_files, dict) or any(
             not isinstance(file_id, str) or not isinstance(item, dict)
@@ -395,6 +399,20 @@ class Manifest:
             raise DriveRagError(
                 "manifest file key must match file_id", code="INVALID_STATE"
             )
+        coverage = payload.get("coverage", "complete")
+        coverage_reason = payload.get("coverage_reason")
+        if coverage not in {"complete", "partial"}:
+            raise DriveRagError("manifest coverage is invalid", code="INVALID_STATE")
+        if coverage == "complete" and coverage_reason is not None:
+            raise DriveRagError(
+                "complete manifest must not have a coverage reason",
+                code="INVALID_STATE",
+            )
+        if coverage == "partial" and not isinstance(coverage_reason, str):
+            raise DriveRagError(
+                "partial manifest requires a coverage reason",
+                code="INVALID_STATE",
+            )
         return cls(
             files,
             _require_string(payload["model_identity"], "model_identity", nullable=True),
@@ -406,6 +424,8 @@ class Manifest:
                 "last_inventory_generated_at",
                 nullable=True,
             ),
+            coverage,
+            coverage_reason,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -418,6 +438,8 @@ class Manifest:
             "last_failure": self.last_failure,
             "root_ids": list(self.root_ids),
             "last_inventory_generated_at": self.last_inventory_generated_at,
+            "coverage": self.coverage,
+            "coverage_reason": self.coverage_reason,
         }
 
 

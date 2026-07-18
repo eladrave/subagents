@@ -37,6 +37,7 @@ OCR_TIMEOUT_SECONDS = 600
 PDF_OCR_TEXT_THRESHOLD = 40
 PDF_OCR_DPI = 200
 MAX_PDF_PAGES = 10_000
+MAX_PDF_FILE_BYTES = 32 * 1024 * 1024
 MAX_PDF_OCR_PIXELS = 50_000_000
 MAX_IMAGE_DIMENSION = 20_000
 MAX_IMAGE_PIXELS = 50_000_000
@@ -87,6 +88,11 @@ def extract_file(
 
     try:
         if mime_type == "application/pdf":
+            if source.stat().st_size > MAX_PDF_FILE_BYTES:
+                raise DriveRagError(
+                    "PDF exceeds the 32 MiB extraction limit",
+                    code="EXTRACTION_LIMIT_EXCEEDED",
+                )
             return _extract_pdf(file_id, revision, source, ocr_languages)
         if mime_type == DOCX_MIME:
             return _extract_docx(file_id, revision, source)

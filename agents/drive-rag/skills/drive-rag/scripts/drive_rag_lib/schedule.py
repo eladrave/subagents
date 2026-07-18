@@ -20,8 +20,10 @@ Synchronize every enabled configured Google Drive folder into the shared local
 state. Prove recursive inventory completeness before any deletion, export native
 Google Docs, Sheets, and Slides as PDF, update ChromaDB, and report only status,
 counts, changed identities, and actionable failures. If no folder is configured,
-return CONFIGURATION_REQUIRED. If connector output is incomplete or cannot be
-materialized locally, preserve the previous committed mirror and index."""
+return CONFIGURATION_REQUIRED. If connector enumeration is incomplete but every
+discovered file has a stable revision, perform deletion-free partial upserts and
+return PARTIAL_INDEX with a coverage warning. Never authorize deletion from a
+partial inventory; preserve unobserved committed mirror and index records."""
 
 _SCHEDULE_FIELDS = {
     "task_id",

@@ -153,7 +153,14 @@ paste OAuth material into chat.
 
 The agent requires read capabilities for folder listing, metadata, raw-file
 fetch, native PDF export, Google Docs, Google Sheets, and Google Slides. It must
-return `CONNECTOR_UNAVAILABLE` or `CONNECTOR_AUTH_REQUIRED` if those gates fail.
+also have revision-history reads through `list_file_revisions`. It must return
+`CONNECTOR_UNAVAILABLE` or `CONNECTOR_AUTH_REQUIRED` if those gates fail.
+
+Some connector versions return normalized metadata names and omit explicit
+folder-listing completeness markers. The installed agent accepts the normalized
+fields, uses `currentRevisionId` as an opaque pre/post artifact fence, and may
+commit discovered files as `PARTIAL_INDEX`. Partial runs carry a coverage
+warning and never delete unobserved mirror files or ChromaDB records.
 
 ## 8. First-run onboarding
 
@@ -202,7 +209,8 @@ report a deletion test as not run.
 - **discovered**: a fresh Codex task lists the custom agent.
 - **spawned**: actual task activity proves the role ran.
 - **connector-validated**: authenticated required Drive reads were observed.
-- **synced**: a complete validated inventory was committed to mirror and ChromaDB.
+- **synced**: a complete validated inventory, or a deletion-free partial
+  inventory with explicit coverage state, was committed to mirror and ChromaDB.
 - **scheduled**: the exact live hourly task was observed and recorded.
 
 Report only states that were actually proven.

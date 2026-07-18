@@ -25,8 +25,9 @@ from .extract import (
     require_bounded_file,
 )
 from .index import ChromaIndex
-from .inventory import _validate_manifest, plan_sync, prove_complete
+from .inventory import _validate_manifest, plan_sync, validate_inventory_scope
 from .models import (
+    EXTRACTION_LIMIT_EXCEEDED,
     INDEXED,
     UNINDEXED,
     UNSUPPORTED_FORMAT,
@@ -47,6 +48,7 @@ from .models import (
 from .paths import ensure_state_root, resolve_below
 from .protocol import (
     INDEX_STALE,
+    PARTIAL_INDEX,
     SCHEMA_VERSION,
     SYNC_FAILED_PREVIOUS_VERSION_ACTIVE,
     SYNC_OK_CHANGED,
@@ -128,6 +130,8 @@ class SyncStatus:
     model_identity: str
     pending_journal: bool
     schedule_state: str
+    coverage: str
+    coverage_reason: str | None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -141,6 +145,8 @@ class SyncStatus:
             "model_identity": self.model_identity,
             "pending_journal": self.pending_journal,
             "schedule_state": self.schedule_state,
+            "coverage": self.coverage,
+            "coverage_reason": self.coverage_reason,
         }
 
 
@@ -225,7 +231,10 @@ class _PreparedFile:
                     code="INVALID_JOURNAL",
                 )
         elif index_status == UNINDEXED:
-            if index_reason != UNSUPPORTED_FORMAT or chunks or embeddings:
+            if index_reason not in {
+                UNSUPPORTED_FORMAT,
+                EXTRACTION_LIMIT_EXCEEDED,
+            } or chunks or embeddings:
                 raise DriveRagError(
                     "unindexed prepared artifact is inconsistent",
                     code="INVALID_JOURNAL",
@@ -345,7 +354,7 @@ class SyncEngine:
                 self.index.assert_manifest_consistent(base_manifest)
                 return SyncResult(SYNC_OK_NO_CHANGES, self)
             self.index.assert_manifest_consistent(base_manifest)
-            prove_complete(inventory, target_root_ids)
+            validate_inventory_scope(inventory, target_root_ids)
             plan = plan_sync(inventory, base_manifest, target_root_ids)
             base_folders = self._load_committed_folders(base_manifest)
             remotes = self._remote_files(inventory)
@@ -400,7 +409,11 @@ class SyncEngine:
             return SyncResult(SYNC_OK_NO_CHANGES, self)
         self._assert_observed_manifest(journal)
         if journal.phase == "committed":
-            status = SYNC_OK_CHANGED if journal.changed else SYNC_OK_NO_CHANGES
+            status = (
+                PARTIAL_INDEX
+                if not journal.inventory.complete
+                else (SYNC_OK_CHANGED if journal.changed else SYNC_OK_NO_CHANGES)
+            )
             self._discard_pending(journal)
             return SyncResult(status, self)
         try:
@@ -443,6 +456,8 @@ class SyncEngine:
             self._model_identity(),
             self.has_pending_journal(),
             configured_schedule,
+            manifest.coverage,
+            manifest.coverage_reason,
         )
 
     def assert_query_ready(self) -> Manifest:
@@ -506,7 +521,11 @@ class SyncEngine:
             journal = self._advance(journal, "committed")
         if journal.phase != "committed":
             raise DriveRagError("journal phase is invalid", code="INVALID_JOURNAL")
-        status = SYNC_OK_CHANGED if journal.changed else SYNC_OK_NO_CHANGES
+        status = (
+            PARTIAL_INDEX
+            if not journal.inventory.complete
+            else (SYNC_OK_CHANGED if journal.changed else SYNC_OK_NO_CHANGES)
+        )
         self._discard_pending(journal)
         return SyncResult(status, self)
 
@@ -568,11 +587,14 @@ class SyncEngine:
                         remote.mime_type,
                     )
                 except DriveRagError as exc:
-                    if exc.code != "UNSUPPORTED_FORMAT":
+                    if exc.code not in {
+                        UNSUPPORTED_FORMAT,
+                        EXTRACTION_LIMIT_EXCEEDED,
+                    }:
                         raise
                     document = None
                     index_status = UNINDEXED
-                    index_reason = UNSUPPORTED_FORMAT
+                    index_reason = exc.code
             chunks = (
                 chunk_document(document, self.embedder) if document is not None else ()
             )
@@ -654,11 +676,13 @@ class SyncEngine:
     def _delete_stale(self, journal: Journal) -> None:
         base_aliases = self._folder_map(journal.base_folders)
         target_aliases = self._folder_map(journal.target_folders)
-        remotes = self._remote_files(journal.inventory)
         desired: set[Path] = set()
-        for file_id, paths in journal.plan.target_paths.items():
-            remote = remotes[file_id]
-            desired.update(self._mirror_path(remote, path, target_aliases) for path in paths)
+        target_manifest = self._build_target_manifest(journal)
+        for committed in target_manifest.files.values():
+            desired.update(
+                self._mirror_path_from_kind(path, committed.native_kind, target_aliases)
+                for path in committed.paths
+            )
 
         for file_id, committed in journal.base_manifest.files.items():
             for path in committed.paths:
@@ -955,6 +979,64 @@ class SyncEngine:
                         mime_type=remote.mime_type,
                     )
                 )
+        preserved_ids = set(journal.base_manifest.files) - set(remotes)
+        for page in self.index.iter_file_record_pages(preserved_ids):
+            metadatas = page.get("metadatas")
+            if not isinstance(metadatas, list):
+                raise DriveRagError(
+                    "preserved index metadata is missing", code="INDEX_STALE"
+                )
+            for metadata in metadatas:
+                if not isinstance(metadata, dict):
+                    raise DriveRagError(
+                        "preserved index metadata is invalid", code="INDEX_STALE"
+                    )
+                required = (
+                    "drive_file_id",
+                    "revision",
+                    "root_id",
+                    "folder_alias",
+                    "drive_path",
+                    "drive_url",
+                    "local_path",
+                    "mime_type",
+                )
+                if any(
+                    not isinstance(metadata.get(field), str)
+                    or not str(metadata[field]).strip()
+                    for field in required
+                ):
+                    raise DriveRagError(
+                        "preserved index metadata is incomplete", code="INDEX_STALE"
+                    )
+                file_id = str(metadata["drive_file_id"])
+                root_id = str(metadata["root_id"])
+                committed = journal.base_manifest.files.get(file_id)
+                if committed is None or metadata["revision"] != committed.revision:
+                    raise DriveRagError(
+                        "preserved index revision differs from manifest",
+                        code="INDEX_STALE",
+                    )
+                root = {
+                    "alias": str(metadata["folder_alias"]),
+                    "drive_path": str(metadata["drive_path"]),
+                    "drive_url": str(metadata["drive_url"]),
+                    "local_path": str(metadata["local_path"]),
+                }
+                existing_root = roots.setdefault(file_id, {}).get(root_id)
+                if existing_root is not None and existing_root != root:
+                    raise DriveRagError(
+                        "preserved index root metadata is inconsistent",
+                        code="INDEX_STALE",
+                    )
+                roots[file_id][root_id] = root
+                existing_mime = mime_types.get(file_id)
+                if existing_mime is not None and existing_mime != metadata["mime_type"]:
+                    raise DriveRagError(
+                        "preserved index MIME type is inconsistent",
+                        code="INDEX_STALE",
+                    )
+                mime_types[file_id] = str(metadata["mime_type"])
         return candidates, roots, mime_types
 
     def _activate_index(self, journal: Journal, target: Manifest) -> None:
@@ -991,7 +1073,9 @@ class SyncEngine:
     def _build_target_manifest(self, journal: Journal) -> Manifest:
         prepared = self._load_prepared(journal)
         remotes = self._remote_files(journal.inventory)
-        files: dict[str, ManifestFile] = {}
+        files: dict[str, ManifestFile] = (
+            dict(journal.base_manifest.files) if not journal.inventory.complete else {}
+        )
         for file_id in sorted(journal.plan.target_paths):
             remote = remotes[file_id]
             item = prepared.get(file_id)
@@ -1029,6 +1113,8 @@ class SyncEngine:
             None,
             journal.inventory.root_ids,
             journal.inventory.generated_at,
+            "complete" if journal.inventory.complete else "partial",
+            journal.inventory.incomplete_reason,
         )
 
     def _validate_artifact_metadata(
@@ -1326,7 +1412,15 @@ class SyncEngine:
             or target.last_failure is not None
             or target.root_ids != journal.inventory.root_ids
             or target.last_inventory_generated_at != journal.inventory.generated_at
-            or set(target.files) != set(journal.plan.target_paths)
+            or target.coverage
+            != ("complete" if journal.inventory.complete else "partial")
+            or target.coverage_reason != journal.inventory.incomplete_reason
+            or set(target.files)
+            != (
+                set(journal.plan.target_paths)
+                if journal.inventory.complete
+                else set(journal.base_manifest.files) | set(journal.plan.target_paths)
+            )
         ):
             raise DriveRagError(
                 "journal target manifest identity is invalid",
@@ -1335,7 +1429,17 @@ class SyncEngine:
         remotes = self._remote_files(journal.inventory)
         downloads = {remote.file_id for remote in journal.plan.downloads}
         for file_id, committed in target.files.items():
-            remote = remotes[file_id]
+            remote = remotes.get(file_id)
+            if remote is None:
+                if (
+                    journal.inventory.complete
+                    or committed != journal.base_manifest.files.get(file_id)
+                ):
+                    raise DriveRagError(
+                        "partial target changed an unobserved committed file",
+                        code="INVALID_JOURNAL",
+                    )
+                continue
             if (
                 committed.revision != remote.revision
                 or committed.checksum != remote.checksum
@@ -1369,6 +1473,8 @@ class SyncEngine:
             SYNC_FAILED_PREVIOUS_VERSION_ACTIVE,
             journal.base_manifest.root_ids,
             journal.base_manifest.last_inventory_generated_at,
+            journal.base_manifest.coverage,
+            journal.base_manifest.coverage_reason,
         )
         allowed = [journal.base_manifest, failed_base]
         if journal.phase in {"deleted", "activating"} and journal.target_manifest is not None:
@@ -1602,6 +1708,8 @@ class SyncEngine:
             SYNC_FAILED_PREVIOUS_VERSION_ACTIVE,
             base.root_ids,
             base.last_inventory_generated_at,
+            base.coverage,
+            base.coverage_reason,
         )
         atomic_write_json(
             self._manifest_path,
@@ -1874,6 +1982,10 @@ class SyncEngine:
             return False
         if manifest.last_success != inventory.generated_at or manifest.last_failure is not None:
             return False
+        if manifest.coverage != ("complete" if inventory.complete else "partial"):
+            return False
+        if manifest.coverage_reason != inventory.incomplete_reason:
+            return False
         if (
             not isinstance(artifacts, ArtifactSet)
             or artifacts.run_id != inventory.run_id
@@ -1884,7 +1996,7 @@ class SyncEngine:
                 code="INVALID_ARTIFACT",
             )
         target_roots = {folder.folder_id for folder in target_folders}
-        prove_complete(inventory, target_roots)
+        validate_inventory_scope(inventory, target_roots)
         retry_base = replace(
             manifest, last_inventory_generated_at="0001-01-01T00:00:00Z"
         )
@@ -1894,11 +2006,12 @@ class SyncEngine:
         )
         if retry_plan.downloads or retry_plan.deleted_file_ids:
             return False
-        if set(retry_plan.unchanged_file_ids) != set(manifest.files):
+        observed_ids = {remote.file_id for remote in inventory.files}
+        if set(retry_plan.unchanged_file_ids) != observed_ids:
             return False
         if any(
             retry_plan.target_paths[file_id] != manifest.files[file_id].paths
-            for file_id in manifest.files
+            for file_id in observed_ids
         ):
             return False
         committed_folders = self._load_committed_folders(manifest)

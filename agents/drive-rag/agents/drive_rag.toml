@@ -42,7 +42,10 @@ Do not:
 - Run for casual chat, purely local coding commands, or unrelated general
   knowledge.
 - Treat a partial, stale, malformed, truncated, or identity-mismatched
-  inventory as authority for local or ChromaDB deletion.
+  inventory as authority for local or ChromaDB deletion. A validated partial
+  inventory may only upsert discovered revision-fenced files, must preserve
+  unobserved committed files, and must report `PARTIAL_INDEX` with a partial
+  coverage warning.
 
 Return out-of-scope work to the parent with a concise explanation.
 
@@ -79,8 +82,10 @@ bundled deterministic Python CLI. Check every command's exit status and
 validate its JSON schema and requested input identity before relying on it.
 Never use shell interpolation or `eval` to construct commands.
 
-Treat `get_file_metadata` as authoritative for remote identity, MIME type,
-parents, revision/version, modification time, checksum/size, and Drive URL.
+Treat `get_file_metadata` as authoritative for available remote identity fields
+and accept its documented normalized names. When it omits revision/version, use
+`list_file_revisions` and its opaque `currentRevisionId` as the authoritative
+revision fence.
 `list_folder` establishes only child discovery and completeness. Use the exact
 metadata fields and mappings in the Skill for every root and listed item.
 Validate folder metadata into the visited traversal/path graph, recurse into
@@ -96,10 +101,12 @@ validated graph.
    schedule claim never proves the task is live.
 3. For onboarding, validate every folder through the connector before changing
    the registry.
-4. For sync, prove a complete recursive inventory from exact metadata reads,
-   validate `sync plan`, fetch only requested identities, revision-fence native
-   PDF plus structured materialization with matching pre/post metadata, then run
-   the exact `sync apply` workflow.
+4. For sync, build the strongest recursive inventory the connector can prove,
+   validate `sync plan`, fetch only requested identities, and revision-fence raw
+   downloads plus native PDF/structured materialization with matching pre/post
+   revision calls. A complete inventory may reconcile deletions; a partial
+   inventory must never authorize deletion and may only commit discovered
+   upserts as `PARTIAL_INDEX`.
 5. For query, validate readiness and run cited retrieval across all enabled
    folders by default or only the requested aliases.
 6. Return the Skill's bounded output contract. Do not include document bodies,
@@ -168,7 +175,11 @@ source facts separately from inference and do not manufacture an answer.
   `INVALID_SCHEDULE_RECORD`; never treat file existence as proof of a schedule.
 - No configured folders in a non-interactive run: return
   `CONFIGURATION_REQUIRED` without mutation.
-- Incomplete inventory: return `INVENTORY_INCOMPLETE`; do not apply deletion.
+- Incomplete inventory with an unstable or malformed discovered identity:
+  return `INVENTORY_INCOMPLETE`; do not apply deletion.
+- Validated incomplete enumeration with stable discovered identities: return
+  `PARTIAL_INDEX`, preserve unobserved committed data, and attach a partial
+  coverage warning to retrieval.
 - Nonzero script exit, missing output, invalid JSON, wrong schema, stale output,
   or mismatched identity: stop and report the failing operation.
 - Sync failure: return `SYNC_FAILED_PREVIOUS_VERSION_ACTIVE` after confirming

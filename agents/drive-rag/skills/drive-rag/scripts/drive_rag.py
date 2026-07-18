@@ -18,7 +18,7 @@ from drive_rag_lib.inventory import (  # noqa: E402
     load_inventory,
     load_manifest,
     plan_sync,
-    prove_complete,
+    validate_inventory_scope,
 )
 from drive_rag_lib.aliases import alias_key, canonical_alias  # noqa: E402
 from drive_rag_lib.extract import (  # noqa: E402
@@ -31,6 +31,7 @@ from drive_rag_lib.index import ChromaIndex  # noqa: E402
 from drive_rag_lib.models import Chunk, FolderConfig, Manifest  # noqa: E402
 from drive_rag_lib.paths import ensure_state_root, resolve_below  # noqa: E402
 from drive_rag_lib.protocol import (  # noqa: E402
+    PARTIAL_INDEX,
     SCHEMA_VERSION,
     DriveRagError,
     atomic_write_json,
@@ -157,13 +158,15 @@ def _enabled_root_ids(registry: Registry) -> set[str]:
 def run_inventory(args: argparse.Namespace) -> None:
     state_root = ensure_state_root(args.state_root)
     inventory = load_inventory(args.input)
-    prove_complete(inventory, _enabled_root_ids(Registry.load(state_root)))
+    validate_inventory_scope(inventory, _enabled_root_ids(Registry.load(state_root)))
     emit_result(
         "inventory.validate",
-        "ok",
+        "ok" if inventory.complete else PARTIAL_INDEX,
         run_id=inventory.run_id,
         root_count=len(inventory.root_ids),
         file_count=len({remote.file_id for remote in inventory.files}),
+        coverage="complete" if inventory.complete else "partial",
+        coverage_reason=inventory.incomplete_reason,
     )
 
 
@@ -195,6 +198,8 @@ def run_sync(args: argparse.Namespace) -> None:
                 "indexed_chunks": status.indexed_chunks,
             },
             pending_journal=status.pending_journal,
+            coverage=status.coverage,
+            coverage_reason=status.coverage_reason,
         )
         return
     if args.sync_action != "plan":
@@ -204,7 +209,7 @@ def run_sync(args: argparse.Namespace) -> None:
         )
     inventory = load_inventory(args.inventory)
     enabled_root_ids = _enabled_root_ids(Registry.load(state_root))
-    prove_complete(inventory, enabled_root_ids)
+    validate_inventory_scope(inventory, enabled_root_ids)
     manifest = load_manifest(state_root / "manifests" / "current.json")
     sync_plan = plan_sync(inventory, manifest, enabled_root_ids)
     staging_root = resolve_below(state_root, state_root / "staging")
@@ -213,7 +218,7 @@ def run_sync(args: argparse.Namespace) -> None:
     output_sha256 = hashlib.sha256(output.read_bytes()).hexdigest()
     emit_result(
         "sync.plan",
-        "ok",
+        "ok" if inventory.complete else PARTIAL_INDEX,
         run_id=sync_plan.run_id,
         counts={
             "downloads": len(sync_plan.downloads),
@@ -222,6 +227,8 @@ def run_sync(args: argparse.Namespace) -> None:
         },
         output=str(output),
         output_sha256=output_sha256,
+        coverage="complete" if inventory.complete else "partial",
+        coverage_reason=inventory.incomplete_reason,
     )
 
 
@@ -555,6 +562,8 @@ def _invalidate_manifest_for_index_mutation(state_root: Path) -> None:
         "INDEX_STALE: index mutation requires manifest reconciliation",
         manifest.root_ids,
         manifest.last_inventory_generated_at,
+        manifest.coverage,
+        manifest.coverage_reason,
     )
     atomic_write_json(
         manifest_path,
@@ -687,8 +696,15 @@ def run_query(args: argparse.Namespace) -> None:
     )
     emit_result(
         "query",
-        "ok",
+        "ok" if manifest.coverage == "complete" else PARTIAL_INDEX,
         counts={"evidence": len(evidence)},
+        coverage=manifest.coverage,
+        coverage_reason=manifest.coverage_reason,
+        warnings=(
+            []
+            if manifest.coverage == "complete"
+            else ["Results come from a partial Drive inventory; coverage is incomplete."]
+        ),
         evidence=[item.to_dict() for item in evidence],
     )
 

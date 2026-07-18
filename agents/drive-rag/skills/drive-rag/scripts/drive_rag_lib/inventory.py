@@ -12,6 +12,7 @@ import unicodedata
 from urllib.parse import unquote, urlparse
 
 from .models import (
+    EXTRACTION_LIMIT_EXCEEDED,
     INDEXED,
     UNINDEXED,
     UNSUPPORTED_FORMAT,
@@ -81,7 +82,7 @@ def load_manifest(path: Path) -> Manifest:
     if not path.exists():
         return Manifest.empty()
     payload = read_json(path)
-    if set(payload) != {
+    legacy_keys = {
         "schema_version",
         "files",
         "model_identity",
@@ -89,7 +90,9 @@ def load_manifest(path: Path) -> Manifest:
         "last_failure",
         "root_ids",
         "last_inventory_generated_at",
-    }:
+    }
+    coverage_keys = legacy_keys | {"coverage", "coverage_reason"}
+    if set(payload) not in (legacy_keys, coverage_keys):
         raise DriveRagError(
             "manifest must contain exactly the schema-1 manifest fields",
             code="INVALID_STATE",
@@ -126,12 +129,26 @@ def prove_complete(
     return inventory
 
 
+def validate_inventory_scope(
+    inventory: RemoteInventory, expected_root_ids: Collection[str]
+) -> RemoteInventory:
+    """Validate exact root scope without treating partial coverage as deletion proof."""
+
+    _validate_inventory(inventory)
+    if set(inventory.root_ids) != set(expected_root_ids):
+        raise DriveRagError(
+            "inventory roots do not match the expected root set",
+            code=INVENTORY_INCOMPLETE,
+        )
+    return inventory
+
+
 def plan_sync(
     inventory: RemoteInventory,
     manifest: Manifest,
     expected_root_ids: Collection[str] | None = None,
 ) -> SyncPlan:
-    """Plan downloads and deletions only from a proven-complete inventory."""
+    """Plan upserts from any scoped inventory and deletions only when complete."""
 
     _validate_manifest(manifest)
     expected_roots = (
@@ -139,7 +156,7 @@ def plan_sync(
         if expected_root_ids is not None
         else set(manifest.root_ids or inventory.root_ids)
     )
-    prove_complete(inventory, expected_roots)
+    validate_inventory_scope(inventory, expected_roots)
     generated_at = _parse_generated_at(inventory.generated_at, "inventory generated_at")
     if manifest.last_inventory_generated_at is not None:
         last_generated_at = _parse_generated_at(
@@ -168,7 +185,11 @@ def plan_sync(
         run_id=inventory.run_id,
         downloads=tuple(downloads),
         unchanged_file_ids=tuple(unchanged),
-        deleted_file_ids=tuple(sorted(set(manifest.files) - set(current))),
+        deleted_file_ids=(
+            tuple(sorted(set(manifest.files) - set(current)))
+            if inventory.complete
+            else ()
+        ),
         target_paths=_resolve_collisions(current),
     )
 
@@ -209,6 +230,19 @@ def _validate_inventory(inventory: RemoteInventory) -> None:
 
 
 def _validate_manifest(manifest: Manifest) -> None:
+    if manifest.coverage not in {"complete", "partial"}:
+        raise DriveRagError("manifest coverage is invalid", code="INVALID_STATE")
+    if manifest.coverage == "complete" and manifest.coverage_reason is not None:
+        raise DriveRagError(
+            "complete manifest must not have a coverage reason", code="INVALID_STATE"
+        )
+    if manifest.coverage == "partial" and not (
+        isinstance(manifest.coverage_reason, str)
+        and manifest.coverage_reason.strip()
+    ):
+        raise DriveRagError(
+            "partial manifest requires a coverage reason", code="INVALID_STATE"
+        )
     valid_root_ids = isinstance(manifest.root_ids, tuple) and all(
         isinstance(root_id, str)
         and bool(root_id.strip())
@@ -300,7 +334,10 @@ def _validate_manifest(manifest: Manifest) -> None:
                     code="INVALID_STATE",
                 )
         elif committed.index_status == UNINDEXED:
-            if committed.index_reason != UNSUPPORTED_FORMAT:
+            if committed.index_reason not in {
+                UNSUPPORTED_FORMAT,
+                EXTRACTION_LIMIT_EXCEEDED,
+            }:
                 raise DriveRagError(
                     f"manifest file {file_id} has an invalid unindexed reason",
                     code="INVALID_STATE",

@@ -10,8 +10,13 @@ The subagent:
 - recursively traverses every enabled folder and verifies remote identities and revisions;
 - mirrors ordinary files locally;
 - exports Google Docs, Sheets, and Slides to PDF and also indexes their structured content;
+- mirrors extraction-limited artifacts while recording them as explicitly
+  unindexed, so one oversized file cannot block the rest of the corpus;
 - chunks content and creates multilingual embeddings in persistent ChromaDB;
 - removes local files and ChromaDB records only after a complete, validated remote inventory proves deletion;
+- safely indexes revision-fenced discovered files as `PARTIAL_INDEX` when the
+  connector cannot prove folder-listing completeness, without deleting
+  unobserved local or ChromaDB records;
 - returns evidence with Drive URL, Drive path, local path, locator, revision/hash, and retrieval distance; and
 - maintains one hourly project-scoped scheduled sync when Codex task automation is available.
 
@@ -55,7 +60,9 @@ one or more folder URLs and optional aliases. It never guesses a folder from
 recent files or searches by folder name.
 
 An added folder is available for retrieval only after a complete recursive sync
-successfully commits its mirror and ChromaDB records. Google Docs, Sheets, and
+or a safe deletion-free partial sync successfully commits its mirror and
+ChromaDB records. Partial results carry an explicit coverage warning until the
+connector proves complete enumeration. Google Docs, Sheets, and
 Slides are exported to PDF and their structured content is indexed as part of
 that synchronization.
 
@@ -127,6 +134,9 @@ scheduled.
 - Private mirror/index state defaults to `<workspace>/.drive-rag`.
 - Google Drive content is never mutated.
 - A cached schedule record is never treated as proof that a scheduled task exists.
+- Connector-normalized metadata is supported, and `list_file_revisions`
+  supplies opaque pre/post revision fences when metadata omits revision fields.
+- Partial folder listings can upsert discovered files but can never authorize deletion.
 
 The index uses `intfloat/multilingual-e5-small` through FastEmbed and persists
 locally. The first embedding operation may download model files.

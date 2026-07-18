@@ -36,6 +36,7 @@ Give Codex this folder URL and say:
 ## Runtime boundaries
 
 - Linux, Python 3.11 or newer, and Tesseract OCR are required.
+- The subagent is pinned to `gpt-5.6-terra` with medium reasoning effort.
 - The runtime virtual environment is `/opt/drive-rag/venv`.
 - Personal Codex assets default to `~/.codex`.
 - Private mirror/index state defaults to `<workspace>/.drive-rag`.

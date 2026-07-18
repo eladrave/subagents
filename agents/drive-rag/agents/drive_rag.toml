@@ -1,5 +1,7 @@
 name = "drive_rag"
 description = "Use alongside the parent for substantive questions that may be answered by configured Google Drive corpora, and for explicit Drive RAG setup, sync, status, or retrieval. Do not use for casual chat, purely local coding commands, or unrelated general knowledge."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
 sandbox_mode = "workspace-write"
 nickname_candidates = ["Archivist", "Index", "Scribe"]
 
